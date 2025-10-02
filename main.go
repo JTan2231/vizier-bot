@@ -23,6 +23,7 @@ type interaction struct {
 	ApplicationID string                  `json:"application_id"`
 	Token         string                  `json:"token"`
 	Type          int                     `json:"type"`
+	ChannelID     string                  `json:"channel_id"`
 	Data          *applicationCommandData `json:"data,omitempty"`
 }
 
@@ -51,6 +52,8 @@ const (
 	interactionTypePing               = 1
 	interactionTypeApplicationCommand = 2
 )
+
+const interactionCallbackTypeDeferredChannelMessage = 5
 
 const discordAPIBaseURL = "https://discord.com/api/v10"
 
@@ -201,36 +204,51 @@ func runVizierCommand(ctx context.Context, env *interaction) interactionResponse
 
 	if env.ApplicationID == "" || env.Token == "" {
 		log.Printf("interaction missing application metadata (application_id=%q, token present=%t)", env.ApplicationID, env.Token != "")
-		return messageResponse("unable to send follow-up message for this interaction")
+		return messageResponse("unable to acknowledge this interaction")
 	}
+
+	channelID := strings.TrimSpace(env.ChannelID)
+	botToken := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 
 	runner := workspace.Runner{
 		GitCloneTimeout: 1 * time.Minute,
 		CommandTimeout:  2 * time.Minute,
 	}
 
-	go func(appID, token, repoArg, runnerCommand string) {
+	defaultAck := fmt.Sprintf("Queued vizier run for `%s`. Results will follow here shortly.", repo)
+	shouldRun := true
+	if channelID == "" {
+		log.Printf("interaction %q missing channel id; skipping vizier execution", env.ID)
+		defaultAck = "Unable to run vizier: could not determine the channel for follow-up messages."
+		shouldRun = false
+	} else if botToken == "" {
+		log.Printf("DISCORD_BOT_TOKEN is not configured; unable to send vizier results")
+		defaultAck = "Unable to run vizier: bot configuration is incomplete."
+		shouldRun = false
+	}
+	ackMessage := truncateToRunes(defaultAck, maxDiscordMessageLength)
+
+	go func(interactionID, appID, token, repoArg, runnerCommand, botSecret, channelID, ack string, run bool, runConfig workspace.Runner) {
 		jobCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		output, runErr := runner.Run(jobCtx, repoArg, runnerCommand)
+		output, runErr := runConfig.Run(jobCtx, repoArg, runnerCommand)
 		var message string
 		if runErr != nil {
-			log.Printf("vizier command failed: %v", runErr)
-			message = formatErrorMessage(runErr)
+			log.Printf("vizier command %s failed: %v", interactionID, runErr)
+			message = "testing!" //formatErrorMessage(runErr)
 		} else {
 			message = formatSuccessMessage(output)
 		}
 
 		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer notifyCancel()
-		if err := sendFollowupMessage(notifyCtx, appID, token, message); err != nil {
-			log.Printf("failed to send follow-up message: %v", err)
+		if err := sendChannelMessage(notifyCtx, botSecret, channelID, message); err != nil {
+			log.Printf("failed to send vizier result message for interaction %s: %v", interactionID, err)
 		}
-	}(env.ApplicationID, env.Token, repo, command)
+	}(env.ID, env.ApplicationID, env.Token, repo, command, botToken, channelID, ackMessage, shouldRun, runner)
 
-	ack := fmt.Sprintf("Queued vizier run for `%s`. Results will follow here shortly.", repo)
-	return messageResponse(truncateToRunes(ack, maxDiscordMessageLength))
+	return interactionResponse{Type: interactionCallbackTypeDeferredChannelMessage}
 }
 
 func extractStringOption(options []applicationCommandDataOption, names ...string) (string, bool, error) {
@@ -307,9 +325,12 @@ func truncateToRunes(text string, limit int) string {
 	return string(runes[:limit-1]) + "…"
 }
 
-func sendFollowupMessage(ctx context.Context, applicationID, token, content string) error {
-	if applicationID == "" || token == "" {
-		return errors.New("missing application id or token")
+func sendChannelMessage(ctx context.Context, botToken, channelID, content string) error {
+	if botToken == "" {
+		return errors.New("missing bot token")
+	}
+	if channelID == "" {
+		return errors.New("missing channel id")
 	}
 	payload := struct {
 		Content string `json:"content"`
@@ -318,28 +339,29 @@ func sendFollowupMessage(ctx context.Context, applicationID, token, content stri
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal follow-up payload: %w", err)
+		return fmt.Errorf("marshal channel message payload: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/webhooks/%s/%s", discordAPIBaseURL, applicationID, token)
+	url := fmt.Sprintf("%s/channels/%s/messages", discordAPIBaseURL, channelID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build follow-up request: %w", err)
+		return fmt.Errorf("build channel message request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bot "+botToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("send follow-up request: %w", err)
+		return fmt.Errorf("send channel message request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
 		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<12))
 		if readErr != nil {
-			return fmt.Errorf("follow-up request failed: status %s", resp.Status)
+			return fmt.Errorf("channel message request failed: status %s", resp.Status)
 		}
-		return fmt.Errorf("follow-up request failed: status %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		return fmt.Errorf("channel message request failed: status %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
 	return nil
