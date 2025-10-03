@@ -71,7 +71,7 @@ func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", repoURL, dest)
+	cmd := exec.CommandContext(ctx, "./git", "clone", "--depth", "1", repoURL, dest)
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
