@@ -53,7 +53,7 @@ const (
 	interactionTypeApplicationCommand = 2
 )
 
-const interactionCallbackTypeDeferredChannelMessage = 5
+const interactionCallbackTypeChannelMessageWithSource = 4
 
 const discordAPIBaseURL = "https://discord.com/api/v10"
 
@@ -229,27 +229,25 @@ func runVizierCommand(ctx context.Context, env *interaction) interactionResponse
 	}
 
 	channelID := strings.TrimSpace(env.ChannelID)
+	if channelID == "" {
+		log.Printf("interaction %q missing channel id; skipping vizier execution", env.ID)
+		return messageResponse("Unable to run vizier: could not determine the channel for follow-up messages.")
+	}
+
 	botToken := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+	if botToken == "" {
+		log.Printf("DISCORD_BOT_TOKEN is not configured; unable to send vizier results")
+		return messageResponse("Unable to run vizier: bot configuration is incomplete.")
+	}
 
 	runner := workspace.Runner{
 		GitCloneTimeout: 1 * time.Minute,
 		CommandTimeout:  2 * time.Minute,
 	}
 
-	defaultAck := fmt.Sprintf("Queued vizier run for `%s`. Results will follow here shortly.", repo)
-	shouldRun := true
-	if channelID == "" {
-		log.Printf("interaction %q missing channel id; skipping vizier execution", env.ID)
-		defaultAck = "Unable to run vizier: could not determine the channel for follow-up messages."
-		shouldRun = false
-	} else if botToken == "" {
-		log.Printf("DISCORD_BOT_TOKEN is not configured; unable to send vizier results")
-		defaultAck = "Unable to run vizier: bot configuration is incomplete."
-		shouldRun = false
-	}
-	ackMessage := truncateToRunes(defaultAck, maxDiscordMessageLength)
+	ack := acknowledgeInteraction()
 
-	go func(interactionID, appID, token, repoArg, runnerCommand, botSecret, channelID, ack string, run bool, runConfig workspace.Runner) {
+	go func(interactionID, repoArg, runnerCommand, botSecret, channelID string, runConfig workspace.Runner) {
 		jobCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
@@ -257,7 +255,7 @@ func runVizierCommand(ctx context.Context, env *interaction) interactionResponse
 		var message string
 		if runErr != nil {
 			log.Printf("vizier command %s failed: %v", interactionID, runErr)
-			message = "testing!" //formatErrorMessage(runErr)
+			message = formatErrorMessage(runErr)
 		} else {
 			message = formatSuccessMessage(output)
 		}
@@ -267,9 +265,9 @@ func runVizierCommand(ctx context.Context, env *interaction) interactionResponse
 		if err := sendChannelMessage(notifyCtx, botSecret, channelID, message); err != nil {
 			log.Printf("failed to send vizier result message for interaction %s: %v", interactionID, err)
 		}
-	}(env.ID, env.ApplicationID, env.Token, repo, command, botToken, channelID, ackMessage, shouldRun, runner)
+	}(env.ID, repo, command, botToken, channelID, runner)
 
-	return interactionResponse{Type: interactionCallbackTypeDeferredChannelMessage}
+	return ack
 }
 
 func extractStringOption(options []applicationCommandDataOption, names ...string) (string, bool, error) {
@@ -297,11 +295,41 @@ func extractStringOption(options []applicationCommandDataOption, names ...string
 	return "", false, nil
 }
 
+const ackMessageContent = "Message received"
+
+func acknowledgeInteraction() interactionResponse {
+	return interactionResponse{
+		Type: interactionCallbackTypeChannelMessageWithSource,
+		Data: &messageData{Content: ackMessageContent},
+	}
+}
+
 func messageResponse(content string) interactionResponse {
 	if content == "" {
 		content = "(no content)"
 	}
-	return interactionResponse{Type: 4, Data: &messageData{Content: content}}
+	return interactionResponse{Type: interactionCallbackTypeChannelMessageWithSource, Data: &messageData{Content: content}}
+}
+
+func formatErrorMessage(runErr error) string {
+	if runErr == nil {
+		return "vizier run failed with no additional details"
+	}
+
+	detail := strings.TrimSpace(runErr.Error())
+	if detail == "" {
+		return "vizier run failed"
+	}
+
+	const prefix = "vizier run failed.\n```"
+	const suffix = "\n```"
+	budget := maxDiscordMessageLength - len(prefix) - len(suffix)
+	if budget <= 0 {
+		return "vizier run failed"
+	}
+
+	truncated := truncateToRunes(detail, budget)
+	return prefix + truncated + suffix
 }
 
 func formatSuccessMessage(output string) string {
