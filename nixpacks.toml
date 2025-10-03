@@ -2,6 +2,7 @@
 nixPkgs = [
   'go',
 ]
+aptPkgs = ['unzip']
 
 [phases.build]
 cmds = [
