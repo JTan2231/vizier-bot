@@ -1,7 +1,6 @@
 [phases.setup]
 nixPkgs = [
   'go',
-  'make',
   'gcc',
 ]
 aptPkgs = ['unzip']
