@@ -5,8 +5,10 @@ nixPkgs = [
 
 [phases.build]
 cmds = [
+  "mkdir -p $HOME/bin",
   "curl -L -O https://github.com/git/git/archive/refs/tags/v2.51.0.zip",
-  "unzip v2.51.0.zip && cd v2.51.0.zip && make && cp git ..",
+  "unzip v2.51.0.zip && cd git-2.51.0 && make && cp git $HOME/bin/",
+  "export PATH=$HOME/bin:$PATH",
 ]
 
 [start]
