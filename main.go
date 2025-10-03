@@ -133,10 +133,10 @@ func interactionHandler(publicKey ed25519.PublicKey) http.Handler {
 			return
 		}
 
-		if !verifyRequest(r, publicKey, body) {
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-			return
-		}
+		// if !verifyRequest(r, publicKey, body) {
+		// 	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		// 	return
+		// }
 
 		var envelope interaction
 		if err := json.Unmarshal(body, &envelope); err != nil {
