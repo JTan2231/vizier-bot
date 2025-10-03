@@ -7,7 +7,8 @@ nixPkgs = [
 cmds = [
   "curl -L -O https://github.com/JTan2231/vizier-bot/releases/download/git/git",
   "export PATH=$PWD:$PATH",
+  "go build"
 ]
 
 [start]
-cmd = "go run main.go"
+cmd = "./vizier-bot"
