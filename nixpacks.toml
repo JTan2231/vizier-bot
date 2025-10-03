@@ -1,5 +1,13 @@
 [phases.setup]
 nixPkgs = [
-  'git',
   'go',
 ]
+
+[phases.build]
+cmds = [
+  "curl -L -O https://github.com/git/git/archive/refs/tags/v2.51.0.zip",
+  "unzip v2.51.0.zip && cd v2.51.0.zip && make && cp git ..",
+]
+
+[start]
+cmd = "go run main.go"
