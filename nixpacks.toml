@@ -10,4 +10,4 @@ cmds = [
 ]
 
 [start]
-cmd = "ls && ./vizier-bot"
+cmd = "ls -l git && ./vizier-bot"
