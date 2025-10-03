@@ -59,10 +59,31 @@ const discordAPIBaseURL = "https://discord.com/api/v10"
 
 const maxDiscordMessageLength = 2000
 
+const (
+	applicationCommandTypeChatInput    = 1
+	applicationCommandOptionTypeString = 3
+)
+
 func main() {
 	publicKey, err := loadPublicKey(os.Getenv("DISCORD_PUBLIC_KEY"))
 	if err != nil {
 		log.Fatalf("failed to load DISCORD_PUBLIC_KEY: %v", err)
+	}
+
+	applicationID := strings.TrimSpace(os.Getenv("DISCORD_APPLICATION_ID"))
+	if applicationID == "" {
+		log.Fatalf("DISCORD_APPLICATION_ID is not configured")
+	}
+
+	botToken := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+	if botToken == "" {
+		log.Fatalf("DISCORD_BOT_TOKEN is not configured")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := registerPrimaryCommand(ctx, applicationID, botToken); err != nil {
+		log.Fatalf("failed to register vizier command: %v", err)
 	}
 
 	addr := listenAddr()
@@ -300,17 +321,6 @@ func formatSuccessMessage(output string) string {
 	return prefix + truncated + suffix
 }
 
-func formatErrorMessage(err error) string {
-	const prefix = "vizier run failed: "
-	budget := maxDiscordMessageLength - len(prefix)
-	if budget <= 0 {
-		return prefix
-	}
-	msg := err.Error()
-	truncated := truncateToRunes(msg, budget)
-	return prefix + truncated
-}
-
 func truncateToRunes(text string, limit int) string {
 	if limit <= 0 {
 		return ""
@@ -365,4 +375,160 @@ func sendChannelMessage(ctx context.Context, botToken, channelID, content string
 	}
 
 	return nil
+}
+
+type commandPayload struct {
+	Name        string          `json:"name"`
+	Type        int             `json:"type"`
+	Description string          `json:"description"`
+	Options     []commandOption `json:"options,omitempty"`
+}
+
+type commandOption struct {
+	Type        int    `json:"type"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+type commandResponse struct {
+	ID string `json:"id"`
+	commandPayload
+}
+
+func registerPrimaryCommand(ctx context.Context, applicationID, botToken string) error {
+	if applicationID == "" {
+		return errors.New("missing application id")
+	}
+	if botToken == "" {
+		return errors.New("missing bot token")
+	}
+
+	desired := commandPayload{
+		Name:        "vizier",
+		Type:        applicationCommandTypeChatInput,
+		Description: "Run vizier in a repository",
+		Options: []commandOption{
+			{
+				Type:        applicationCommandOptionTypeString,
+				Name:        "repo",
+				Description: "Target repository (URL or owner/name)",
+				Required:    true,
+			},
+			{
+				Type:        applicationCommandOptionTypeString,
+				Name:        "command",
+				Description: "vizier command to execute",
+				Required:    true,
+			},
+		},
+	}
+
+	commandsURL := fmt.Sprintf("%s/applications/%s/commands", discordAPIBaseURL, applicationID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, commandsURL, nil)
+	if err != nil {
+		return fmt.Errorf("build command list request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bot "+botToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch command list: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<12))
+		if readErr != nil {
+			return fmt.Errorf("fetch command list failed: status %s", resp.Status)
+		}
+		return fmt.Errorf("fetch command list failed: status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var existing []commandResponse
+	if err := json.NewDecoder(resp.Body).Decode(&existing); err != nil {
+		return fmt.Errorf("decode command list: %w", err)
+	}
+
+	var match *commandResponse
+	for i := range existing {
+		cmd := &existing[i]
+		if cmd.Name == desired.Name && cmd.Type == desired.Type {
+			match = cmd
+			break
+		}
+	}
+
+	if match != nil && commandDefinitionsMatch(match.commandPayload, desired) {
+		log.Printf("vizier command already registered")
+		return nil
+	}
+
+	body, err := json.Marshal(desired)
+	if err != nil {
+		return fmt.Errorf("marshal command payload: %w", err)
+	}
+
+	if match == nil {
+		if err := sendCommandMutation(ctx, http.MethodPost, commandsURL, botToken, body); err != nil {
+			return fmt.Errorf("create vizier command: %w", err)
+		}
+		log.Printf("created vizier command")
+		return nil
+	}
+
+	updateURL := fmt.Sprintf("%s/%s", commandsURL, match.ID)
+	if err := sendCommandMutation(ctx, http.MethodPatch, updateURL, botToken, body); err != nil {
+		return fmt.Errorf("update vizier command: %w", err)
+	}
+	log.Printf("updated vizier command")
+	return nil
+}
+
+func sendCommandMutation(ctx context.Context, method, url, botToken string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build command request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bot "+botToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send command request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<12))
+		if readErr != nil {
+			return fmt.Errorf("command request failed: status %s", resp.Status)
+		}
+		return fmt.Errorf("command request failed: status %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	return nil
+}
+
+func commandDefinitionsMatch(current, desired commandPayload) bool {
+	if current.Name != desired.Name || current.Type != desired.Type || current.Description != desired.Description {
+		return false
+	}
+	if len(current.Options) != len(desired.Options) {
+		return false
+	}
+	currentByName := make(map[string]commandOption, len(current.Options))
+	for _, opt := range current.Options {
+		currentByName[opt.Name] = opt
+	}
+	for _, opt := range desired.Options {
+		actual, ok := currentByName[opt.Name]
+		if !ok {
+			return false
+		}
+		if actual.Type != opt.Type || actual.Description != opt.Description || actual.Required != opt.Required {
+			return false
+		}
+	}
+	return true
 }
