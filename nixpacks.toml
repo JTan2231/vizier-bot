@@ -1,5 +1,6 @@
 [phases.setup]
 nixPkgs = [
+  'gcc',
   'rustup',
   'go',
 ]
