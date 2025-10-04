@@ -6,13 +6,13 @@ nixPkgs = [
   'pkg-config',
   'openssl',
 ]
-aptPkgs = ['unzip']
+aptPkgs = ['unzip', 'libssl-dev']
 
 [phases.build]
 cmds = [
   "find / -name \"*nix*\" -prune -o -name \"*include*\" -type f -print",
-  "curl -L -O https://github.com/openssl/openssl/archive/refs/tags/openssl-3.6.0.zip",
-  "unzip openssl-3.6.0.zip && cd openssl-3.6.0.zip && ./Configure --prefix=/opt/openssl --openssldir=/usr/ssl && make && make install && cd ..",
+  # "curl -L -O https://github.com/openssl/openssl/archive/refs/tags/openssl-3.6.0.zip",
+  # "unzip openssl-3.6.0.zip && cd openssl-3.6.0.zip && ./Configure --prefix=/opt/openssl --openssldir=/usr/ssl && make && make install && cd ..",
   "rustup default stable",
   "curl -L -O https://github.com/JTan2231/vizier/archive/refs/tags/v0.0.2.zip",
   "unzip v0.0.2.zip && cd vizier-0.0.2 && (OPENSSL_DIR=/usr/lib/x86_64-linux-gnu cargo build --release || OPENSSL_DIR=/usr/lib/x86_64-linux-gnu cargo build --release) && mv target/release/vizier ..",
