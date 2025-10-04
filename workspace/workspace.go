@@ -38,6 +38,42 @@ type Runner struct {
 	CommandTimeout time.Duration
 }
 
+type repoWorkspace struct {
+	root string
+}
+
+func newRepoWorkspace(path string) (*repoWorkspace, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("determine repository path: %w", err)
+	}
+	return &repoWorkspace{root: abs}, nil
+}
+
+func (rw *repoWorkspace) Root() string {
+	if rw == nil {
+		return ""
+	}
+	return rw.root
+}
+
+func (rw *repoWorkspace) Join(elements ...string) string {
+	if rw == nil {
+		return ""
+	}
+	if len(elements) == 0 {
+		return rw.root
+	}
+	return filepath.Join(append([]string{rw.root}, elements...)...)
+}
+
+func (rw *repoWorkspace) Close() {
+	if rw == nil {
+		return
+	}
+	rw.root = ""
+}
+
 // Run sets up a temporary workspace, clones the target repository, downloads
 // the vizier binary, runs vizier with the supplied command argument, and then
 // removes the workspace. The combined stdout and stderr from vizier is
@@ -65,15 +101,21 @@ func (r Runner) Run(ctx context.Context, repoArg, vizierCommand string) (string,
 	if err := r.cloneRepo(ctx, repoURL, repoDir); err != nil {
 		return "", err
 	}
-	logRepositoryContents(repoURL, repoDir)
+	repoScope, err := newRepoWorkspace(repoDir)
+	if err != nil {
+		return "", err
+	}
+	defer repoScope.Close()
 
-	vizierPath := filepath.Join(repoDir, "vizier")
+	logRepositoryContents(repoURL, repoScope.Root())
+
+	vizierPath := repoScope.Join("vizier")
 	if err := r.fetchVizierBinary(ctx, vizierPath); err != nil {
 		return "", err
 	}
 	describeVizierBinary(vizierPath)
 
-	return r.runVizier(ctx, repoDir, vizierPath, vizierCommand)
+	return r.runVizier(ctx, repoScope, vizierPath, vizierCommand)
 }
 
 func logRepositoryContents(repoURL, repoDir string) {
@@ -242,7 +284,7 @@ func (r Runner) fetchVizierBinary(parentCtx context.Context, dest string) error 
 	return nil
 }
 
-func (r Runner) runVizier(parentCtx context.Context, repoDir, vizierPath, vizierCommand string) (string, error) {
+func (r Runner) runVizier(parentCtx context.Context, repo *repoWorkspace, vizierPath, vizierCommand string) (string, error) {
 	ctx := parentCtx
 	if r.CommandTimeout > 0 {
 		var cancel context.CancelFunc
@@ -250,9 +292,14 @@ func (r Runner) runVizier(parentCtx context.Context, repoDir, vizierPath, vizier
 		defer cancel()
 	}
 
-	log.Printf("workspace: executing vizier binary %s with command %q in %s", vizierPath, vizierCommand, repoDir)
+	repoRoot := repo.Root()
+	if repoRoot == "" {
+		return "", errors.New("workspace: repository frame is not active")
+	}
+
+	log.Printf("workspace: executing vizier binary %s with command %q in %s", vizierPath, vizierCommand, repoRoot)
 	cmd := exec.CommandContext(ctx, vizierPath, vizierCommand)
-	cmd.Dir = repoDir
+	cmd.Dir = repoRoot
 	var combined bytes.Buffer
 	cmd.Stdout = &combined
 	cmd.Stderr = &combined
