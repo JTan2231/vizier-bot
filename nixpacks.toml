@@ -11,9 +11,9 @@ aptPkgs = ['unzip', 'libssl-dev']
 [phases.build]
 cmds = [
   "find / -name \"*nix*\" -prune -o -name \"*ssl*\" -type f -print",
-  # "curl -L -O https://github.com/openssl/openssl/archive/refs/tags/openssl-3.6.0.zip",
-  # "unzip openssl-3.6.0.zip && cd openssl-3.6.0.zip && ./Configure --prefix=/opt/openssl --openssldir=/usr/ssl && make && make install && cd ..",
-  "ln -s /usr/include/x86_64-linux-gnu/openssl/opensslconf.h /usr/include/openssl",
+  "curl -s -L -O https://github.com/openssl/openssl/archive/refs/tags/openssl-3.6.0.zip",
+  "unzip openssl-3.6.0.zip && cd openssl-3.6.0.zip && ./Configure && make && make install && cd ..",
+  # "ln -s /usr/include/x86_64-linux-gnu/openssl/opensslconf.h /usr/include/openssl",
   "rustup default stable",
   "curl -L -O https://github.com/JTan2231/vizier/archive/refs/tags/v0.0.2.zip",
   "unzip v0.0.2.zip && cd vizier-0.0.2 && (PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig cargo build --release || PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig cargo build --release) && mv target/release/vizier ..",
