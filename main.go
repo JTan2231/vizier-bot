@@ -65,15 +65,18 @@ const (
 )
 
 func main() {
+	log.Printf("starting vizier bot")
 	publicKey, err := loadPublicKey(os.Getenv("DISCORD_PUBLIC_KEY"))
 	if err != nil {
 		log.Fatalf("failed to load DISCORD_PUBLIC_KEY: %v", err)
 	}
+	log.Printf("loaded public key")
 
 	applicationID := strings.TrimSpace(os.Getenv("DISCORD_APPLICATION_ID"))
 	if applicationID == "" {
 		log.Fatalf("DISCORD_APPLICATION_ID is not configured")
 	}
+	log.Printf("application id configured: %s", applicationID)
 
 	botToken := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 	if botToken == "" {
@@ -82,9 +85,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	log.Printf("registering slash command")
 	if err := registerPrimaryCommand(ctx, applicationID, botToken); err != nil {
 		log.Fatalf("failed to register vizier command: %v", err)
 	}
+	log.Printf("slash command registration complete")
 
 	addr := listenAddr()
 	mux := http.NewServeMux()
@@ -122,6 +127,7 @@ func loadPublicKey(hexKey string) (ed25519.PublicKey, error) {
 
 func interactionHandler(publicKey ed25519.PublicKey) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("/interactions request: method=%s, content-length=%d", r.Method, r.ContentLength)
 		if r.Method != http.MethodPost {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
@@ -143,14 +149,18 @@ func interactionHandler(publicKey ed25519.PublicKey) http.Handler {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
+		log.Printf("interaction received: id=%s type=%d", envelope.ID, envelope.Type)
 
 		var resp interactionResponse
 		switch envelope.Type {
 		case interactionTypePing:
+			log.Printf("interaction %s: ping received", envelope.ID)
 			resp = interactionResponse{Type: interactionTypePing}
 		case interactionTypeApplicationCommand:
+			log.Printf("interaction %s: application command received", envelope.ID)
 			resp = handleApplicationCommand(r.Context(), &envelope)
 		default:
+			log.Printf("interaction %s: unsupported type %d", envelope.ID, envelope.Type)
 			resp = messageResponse(fmt.Sprintf("unsupported interaction type: %d", envelope.Type))
 		}
 
@@ -195,6 +205,7 @@ func handleApplicationCommand(ctx context.Context, env *interaction) interaction
 	if data == nil {
 		return messageResponse("missing interaction data")
 	}
+	log.Printf("interaction %s: handling command %q", env.ID, data.Name)
 
 	switch data.Name {
 	case "vizier":
@@ -244,6 +255,7 @@ func runVizierCommand(ctx context.Context, env *interaction) interactionResponse
 		GitCloneTimeout: 1 * time.Minute,
 		CommandTimeout:  2 * time.Minute,
 	}
+	log.Printf("interaction %s: starting vizier runner", env.ID)
 
 	ack := acknowledgeInteraction()
 
@@ -251,20 +263,25 @@ func runVizierCommand(ctx context.Context, env *interaction) interactionResponse
 		jobCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
+		log.Printf("interaction %s: cloning repo %s and executing command", interactionID, repoArg)
+
 		output, runErr := runConfig.Run(jobCtx, repoArg, runnerCommand)
 		var message string
 		if runErr != nil {
 			log.Printf("vizier command %s failed: %v", interactionID, runErr)
 			message = formatErrorMessage(runErr)
 		} else {
+			log.Printf("interaction %s: command completed successfully", interactionID)
 			message = formatSuccessMessage(output)
 		}
 
 		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer notifyCancel()
+		log.Printf("interaction %s: sending follow-up message to channel %s", interactionID, channelID)
 		if err := sendChannelMessage(notifyCtx, botSecret, channelID, message); err != nil {
 			log.Printf("failed to send vizier result message for interaction %s: %v", interactionID, err)
 		}
+		log.Printf("interaction %s: follow-up message dispatched", interactionID)
 	}(env.ID, repo, command, botToken, channelID, runner)
 
 	return ack
