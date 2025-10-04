@@ -3,8 +3,10 @@ nixPkgs = [
   'gcc',
   'rustup',
   'go',
+  'pkg-config',
+  'openssl',
 ]
-aptPkgs = ['unzip', 'libssl-dev']
+aptPkgs = ['unzip']
 
 [phases.build]
 cmds = [
