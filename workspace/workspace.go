@@ -278,7 +278,6 @@ func (r Runner) runVizier(parentCtx context.Context, repo *repoWorkspace, vizier
 	cmd.Dir = repoRoot
 	var combined bytes.Buffer
 	cmd.Stdout = &combined
-	cmd.Stderr = &combined
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("vizier execution failed: %w: %s", err, strings.TrimSpace(combined.String()))
 	}
