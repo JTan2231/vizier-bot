@@ -21,7 +21,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const vizierBinaryURL = "https://github.com/JTan2231/vizier/releases/download/v0.0.1/vizier"
+const vizierBinaryURL = "https://github.com/JTan2231/vizier/releases/download/vizier/vizier"
 
 const maxRepositoryLogEntries = 100
 
