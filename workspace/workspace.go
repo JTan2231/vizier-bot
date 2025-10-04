@@ -113,7 +113,6 @@ func (r Runner) Run(ctx context.Context, repoArg, vizierCommand string) (string,
 	if err := r.fetchVizierBinary(ctx, vizierPath); err != nil {
 		return "", err
 	}
-	describeVizierBinary(vizierPath)
 
 	return r.runVizier(ctx, repoScope, vizierPath, vizierCommand)
 }
@@ -175,19 +174,6 @@ func truncateSuffix(truncated bool) string {
 		return ", truncated"
 	}
 	return ""
-}
-
-func describeVizierBinary(vizierPath string) {
-	describeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(describeCtx, "file", vizierPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("workspace: file command failed for vizier binary %s: %v (output: %s)", vizierPath, err, strings.TrimSpace(string(output)))
-		return
-	}
-	log.Printf("workspace: file output for vizier binary %s: %s", vizierPath, strings.TrimSpace(string(output)))
 }
 
 func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error {
@@ -298,7 +284,7 @@ func (r Runner) runVizier(parentCtx context.Context, repo *repoWorkspace, vizier
 	}
 
 	log.Printf("workspace: executing vizier binary %s with command %q in %s", vizierPath, vizierCommand, repoRoot)
-	cmd := exec.CommandContext(ctx, vizierPath, vizierCommand)
+	cmd := exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("%s %s", vizierPath, vizierCommand))
 	cmd.Dir = repoRoot
 	var combined bytes.Buffer
 	cmd.Stdout = &combined
