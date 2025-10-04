@@ -10,7 +10,7 @@ aptPkgs = ['unzip']
 
 [phases.build]
 cmds = [
-  "ls -R /",
+  "find / -name \"nix\" -prune -o -print",
   "rustup default stable",
   "curl -L -O https://github.com/JTan2231/vizier/archive/refs/tags/v0.0.2.zip",
   "unzip v0.0.2.zip && cd vizier-0.0.2 && (PKG_CONFIG_PATH=/lib/pkgconfig cargo build --release || PKG_CONFIG_PATH=/lib/pkgconfig cargo build --release) && mv target/release/vizier ..",
