@@ -10,7 +10,6 @@ aptPkgs = ['unzip']
 
 [phases.build]
 cmds = [
-  "find / -name \"*nix*\" -prune -o -name \"*ssl*\" -type f -print",
   "find / -name \"*nix*\" -prune -o -name \"*pkgconfig*\" -type f -print",
   "rustup default stable",
   "curl -L -O https://github.com/JTan2231/vizier/archive/refs/tags/v0.0.2.zip",
