@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,6 +22,10 @@ import (
 )
 
 const vizierBinaryURL = "https://github.com/JTan2231/vizier/releases/download/v0.0.1/vizier"
+
+const maxRepositoryLogEntries = 100
+
+var errRepositoryEntryLimit = errors.New("repository entry limit reached")
 
 // Runner orchestrates cloning the repository, downloading the vizier binary,
 // executing the provided command, and cleaning up the temporary workspace.
@@ -59,13 +65,87 @@ func (r Runner) Run(ctx context.Context, repoArg, vizierCommand string) (string,
 	if err := r.cloneRepo(ctx, repoURL, repoDir); err != nil {
 		return "", err
 	}
+	logRepositoryContents(repoURL, repoDir)
 
 	vizierPath := filepath.Join(repoDir, "vizier")
 	if err := r.fetchVizierBinary(ctx, vizierPath); err != nil {
 		return "", err
 	}
+	describeVizierBinary(vizierPath)
 
 	return r.runVizier(ctx, repoDir, vizierPath, vizierCommand)
+}
+
+func logRepositoryContents(repoURL, repoDir string) {
+	entries, truncated, err := gatherRepositoryEntries(repoDir)
+	if err != nil {
+		log.Printf("workspace: failed to list repository contents for %s: %v", repoURL, err)
+		return
+	}
+
+	if len(entries) == 0 {
+		log.Printf("workspace: repository %s has no files", repoURL)
+		return
+	}
+
+	log.Printf("workspace: repository contents for %s (showing %d entries%s):", repoURL, len(entries), truncateSuffix(truncated))
+	for _, entry := range entries {
+		log.Printf("workspace: repo entry: %s", entry)
+	}
+	if truncated {
+		log.Printf("workspace: repository contents truncated at %d entries", len(entries))
+	}
+}
+
+func gatherRepositoryEntries(repoDir string) ([]string, bool, error) {
+	entries := make([]string, 0, maxRepositoryLogEntries)
+	truncated := false
+	err := filepath.WalkDir(repoDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == repoDir {
+			return nil
+		}
+		rel, err := filepath.Rel(repoDir, path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		if d.IsDir() {
+			name += "/"
+		}
+		entries = append(entries, name)
+		if len(entries) >= maxRepositoryLogEntries {
+			truncated = true
+			return errRepositoryEntryLimit
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errRepositoryEntryLimit) {
+		return nil, false, err
+	}
+	return entries, truncated, nil
+}
+
+func truncateSuffix(truncated bool) string {
+	if truncated {
+		return ", truncated"
+	}
+	return ""
+}
+
+func describeVizierBinary(vizierPath string) {
+	describeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(describeCtx, "file", vizierPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("workspace: file command failed for vizier binary %s: %v (output: %s)", vizierPath, err, strings.TrimSpace(string(output)))
+		return
+	}
+	log.Printf("workspace: file output for vizier binary %s: %s", vizierPath, strings.TrimSpace(string(output)))
 }
 
 func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error {
@@ -170,6 +250,7 @@ func (r Runner) runVizier(parentCtx context.Context, repoDir, vizierPath, vizier
 		defer cancel()
 	}
 
+	log.Printf("workspace: executing vizier binary %s with command %q in %s", vizierPath, vizierCommand, repoDir)
 	cmd := exec.CommandContext(ctx, vizierPath, vizierCommand)
 	cmd.Dir = repoDir
 	var combined bytes.Buffer
@@ -178,6 +259,7 @@ func (r Runner) runVizier(parentCtx context.Context, repoDir, vizierPath, vizier
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("vizier execution failed: %w: %s", err, strings.TrimSpace(combined.String()))
 	}
+	log.Printf("workspace: vizier command completed with %d bytes of output", combined.Len())
 
 	return combined.String(), nil
 }
