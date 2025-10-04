@@ -1,9 +1,7 @@
 package workspace
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -17,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v57/github"
-	"golang.org/x/oauth2"
+	git "github.com/go-git/go-git/v5"
+	gitHTTP "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
 const vizierBinaryURL = "https://github.com/JTan2231/vizier/releases/download/vizier/vizier"
@@ -26,6 +24,8 @@ const vizierBinaryURL = "https://github.com/JTan2231/vizier/releases/download/vi
 const maxRepositoryLogEntries = 100
 
 var errRepositoryEntryLimit = errors.New("repository entry limit reached")
+
+var plainCloneContext = git.PlainCloneContext
 
 // Runner orchestrates cloning the repository, downloading the vizier binary,
 // executing the provided command, and cleaning up the temporary workspace.
@@ -200,31 +200,21 @@ func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error
 		return fmt.Errorf("validate destination: %w", err)
 	}
 
-	httpClient := newGitHubHTTPClient(ctx)
-	client := github.NewClient(httpClient)
-
-	archiveURL, _, err := client.Repositories.GetArchiveLink(ctx, owner, repo, github.Tarball, nil, 0)
-	if err != nil {
-		return fmt.Errorf("get repository archive link: %w", err)
+	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+	cloneOptions := &git.CloneOptions{
+		URL:  cloneURL,
+		Tags: git.AllTags,
+	}
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		cloneOptions.Auth = &gitHTTP.BasicAuth{Username: "token", Password: token}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL.String(), nil)
-	if err != nil {
-		return fmt.Errorf("build repository archive request: %w", err)
+	if _, err := plainCloneContext(ctx, destAbs, false, cloneOptions); err != nil {
+		return fmt.Errorf("clone repository: %w", err)
 	}
 
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("download repository archive: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download repository archive: unexpected status %s", resp.Status)
-	}
-
-	if err := extractTarGz(resp.Body, destAbs); err != nil {
-		return fmt.Errorf("extract repository archive: %w", err)
+	if _, err := os.Stat(filepath.Join(destAbs, ".git")); err != nil {
+		return fmt.Errorf("clone repository: missing git metadata: %w", err)
 	}
 
 	return nil
@@ -297,15 +287,6 @@ func (r Runner) runVizier(parentCtx context.Context, repo *repoWorkspace, vizier
 	return combined.String(), nil
 }
 
-func newGitHubHTTPClient(ctx context.Context) *http.Client {
-	token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
-	if token == "" {
-		return http.DefaultClient
-	}
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	return oauth2.NewClient(ctx, ts)
-}
-
 func parseGitHubRepo(raw string) (string, string, error) {
 	trimmed := strings.TrimSpace(raw)
 	trimmed = strings.TrimSuffix(trimmed, "/")
@@ -330,89 +311,6 @@ func parseGitHubRepo(raw string) (string, string, error) {
 	}
 
 	return parts[0], parts[1], nil
-}
-
-func extractTarGz(src io.Reader, dest string) error {
-	gz, err := gzip.NewReader(src)
-	if err != nil {
-		return fmt.Errorf("decompress repository archive: %w", err)
-	}
-	defer gz.Close()
-
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return fmt.Errorf("create destination: %w", err)
-	}
-
-	tarReader := tar.NewReader(gz)
-	var root string
-	for {
-		header, err := tarReader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read repository archive: %w", err)
-		}
-
-		name := header.Name
-		if root == "" {
-			root = strings.SplitN(name, "/", 2)[0]
-		}
-		if root != "" {
-			name = strings.TrimPrefix(name, root)
-		}
-		name = strings.TrimPrefix(name, "/")
-		if name == "" {
-			continue
-		}
-
-		cleanName := filepath.Clean(name)
-		if cleanName == "." || cleanName == "" {
-			continue
-		}
-
-		fullPath := filepath.Join(dest, filepath.FromSlash(cleanName))
-		rel, err := filepath.Rel(dest, fullPath)
-		if err != nil {
-			return fmt.Errorf("determine path for %q: %w", cleanName, err)
-		}
-		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-			return fmt.Errorf("repository archive contains invalid path: %q", cleanName)
-		}
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(fullPath, header.FileInfo().Mode().Perm()); err != nil {
-				return fmt.Errorf("create directory %q: %w", cleanName, err)
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-				return fmt.Errorf("create parent for %q: %w", cleanName, err)
-			}
-			file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, header.FileInfo().Mode())
-			if err != nil {
-				return fmt.Errorf("create file %q: %w", cleanName, err)
-			}
-			if _, err := io.Copy(file, tarReader); err != nil {
-				file.Close()
-				return fmt.Errorf("write file %q: %w", cleanName, err)
-			}
-			if err := file.Close(); err != nil {
-				return fmt.Errorf("close file %q: %w", cleanName, err)
-			}
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-				return fmt.Errorf("create parent for symlink %q: %w", cleanName, err)
-			}
-			if err := os.Symlink(header.Linkname, fullPath); err != nil {
-				return fmt.Errorf("create symlink %q -> %q: %w", cleanName, header.Linkname, err)
-			}
-		default:
-			return fmt.Errorf("unsupported archive entry %q (type %d)", cleanName, header.Typeflag)
-		}
-	}
-
-	return nil
 }
 
 func resolveRepoURL(repoArg string) (string, error) {
