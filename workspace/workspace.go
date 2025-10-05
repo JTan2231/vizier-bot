@@ -202,8 +202,10 @@ func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error
 
 	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 	cloneOptions := &git.CloneOptions{
-		URL:  cloneURL,
-		Tags: git.AllTags,
+		URL:          cloneURL,
+		Depth:        1,
+		SingleBranch: true,
+		Tags:         git.NoTags,
 	}
 	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
 		cloneOptions.Auth = &gitHTTP.BasicAuth{Username: "token", Password: token}

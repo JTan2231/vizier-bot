@@ -29,11 +29,13 @@ func TestCloneRepoUsesHTTPSAndAuth(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "secret-token")
 
 	var (
-		capturedURL  string
-		capturedTags git.TagMode
-		capturedAuth gitTransport.AuthMethod
-		capturedPath string
-		capturedBare bool
+		capturedURL          string
+		capturedTags         git.TagMode
+		capturedAuth         gitTransport.AuthMethod
+		capturedPath         string
+		capturedBare         bool
+		capturedDepth        int
+		capturedSingleBranch bool
 	)
 
 	plainCloneContext = func(ctx context.Context, path string, isBare bool, opts *git.CloneOptions) (*git.Repository, error) {
@@ -42,6 +44,8 @@ func TestCloneRepoUsesHTTPSAndAuth(t *testing.T) {
 		capturedAuth = opts.Auth
 		capturedPath = path
 		capturedBare = isBare
+		capturedDepth = opts.Depth
+		capturedSingleBranch = opts.SingleBranch
 		if err := os.MkdirAll(filepath.Join(path, ".git"), 0o755); err != nil {
 			return nil, err
 		}
@@ -56,7 +60,7 @@ func TestCloneRepoUsesHTTPSAndAuth(t *testing.T) {
 	if capturedURL != "https://github.com/owner/name.git" {
 		t.Fatalf("unexpected clone URL %q", capturedURL)
 	}
-	if capturedTags != git.AllTags {
+	if capturedTags != git.NoTags {
 		t.Fatalf("unexpected tag mode %v", capturedTags)
 	}
 	if capturedPath != dest {
@@ -64,6 +68,12 @@ func TestCloneRepoUsesHTTPSAndAuth(t *testing.T) {
 	}
 	if capturedBare {
 		t.Fatalf("expected non-bare clone")
+	}
+	if capturedDepth != 1 {
+		t.Fatalf("expected depth=1 clone, got %d", capturedDepth)
+	}
+	if !capturedSingleBranch {
+		t.Fatalf("expected single branch clone")
 	}
 
 	basic, ok := capturedAuth.(*gitHTTP.BasicAuth)
