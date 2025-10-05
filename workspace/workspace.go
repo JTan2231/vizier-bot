@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +19,6 @@ import (
 	git "github.com/go-git/go-git/v5"
 	gitHTTP "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
-
-const vizierBinaryURL = "https://github.com/JTan2231/vizier/releases/download/vizier/vizier"
 
 const maxRepositoryLogEntries = 100
 
@@ -223,40 +222,75 @@ func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error
 }
 
 func (r Runner) fetchVizierBinary(parentCtx context.Context, dest string) error {
-	url := r.VizierURL
-	if url == "" {
-		url = vizierBinaryURL
-	}
+	releaseURL := "https://api.github.com/repos/OWNER/REPO/releases/latest"
 
-	req, err := http.NewRequestWithContext(parentCtx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(parentCtx, http.MethodGet, releaseURL, nil)
 	if err != nil {
-		return fmt.Errorf("build vizier request: %w", err)
+		return fmt.Errorf("build release request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("download vizier: %w", err)
+		return fmt.Errorf("fetch release info: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download vizier: unexpected status %s", resp.Status)
+		return fmt.Errorf("fetch release info: unexpected status %s", resp.Status)
+	}
+
+	var release struct {
+		Assets []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return fmt.Errorf("decode release info: %w", err)
+	}
+
+	var vizierURL string
+	for _, asset := range release.Assets {
+		if asset.Name == "vizier" {
+			vizierURL = asset.BrowserDownloadURL
+			break
+		}
+	}
+
+	if vizierURL == "" {
+		return fmt.Errorf("vizier binary not found in release assets")
+	}
+
+	return r.downloadFromURL(parentCtx, vizierURL, dest)
+}
+
+func (r Runner) downloadFromURL(ctx context.Context, url, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build download request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("download binary: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download binary: unexpected status %s", resp.Status)
 	}
 
 	file, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
-		return fmt.Errorf("create vizier binary: %w", err)
+		return fmt.Errorf("create binary file: %w", err)
 	}
 	if _, err := io.Copy(file, resp.Body); err != nil {
 		file.Close()
-		return fmt.Errorf("write vizier binary: %w", err)
+		return fmt.Errorf("write binary: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close vizier binary: %w", err)
-	}
-
-	if err := os.Chmod(dest, 0o755); err != nil {
-		return fmt.Errorf("set vizier permissions: %w", err)
+		return fmt.Errorf("close binary file: %w", err)
 	}
 
 	return nil
