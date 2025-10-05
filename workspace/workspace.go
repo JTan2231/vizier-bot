@@ -221,48 +221,11 @@ func (r Runner) cloneRepo(parentCtx context.Context, repoURL, dest string) error
 	return nil
 }
 
+// TODO: automate this version grabbing
 func (r Runner) fetchVizierBinary(parentCtx context.Context, dest string) error {
-	releaseURL := "https://api.github.com/repos/OWNER/REPO/releases/latest"
+	releaseURL := "https://github.com/JTan2231/vizier/releases/download/v0.0.3/vizier"
 
-	req, err := http.NewRequestWithContext(parentCtx, http.MethodGet, releaseURL, nil)
-	if err != nil {
-		return fmt.Errorf("build release request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("fetch release info: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch release info: unexpected status %s", resp.Status)
-	}
-
-	var release struct {
-		Assets []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return fmt.Errorf("decode release info: %w", err)
-	}
-
-	var vizierURL string
-	for _, asset := range release.Assets {
-		if asset.Name == "vizier" {
-			vizierURL = asset.BrowserDownloadURL
-			break
-		}
-	}
-
-	if vizierURL == "" {
-		return fmt.Errorf("vizier binary not found in release assets")
-	}
-
-	return r.downloadFromURL(parentCtx, vizierURL, dest)
+	return r.downloadFromURL(parentCtx, releaseURL, dest)
 }
 
 func (r Runner) downloadFromURL(ctx context.Context, url, dest string) error {
